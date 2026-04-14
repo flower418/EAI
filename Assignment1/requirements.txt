@@ -1,0 +1,6 @@
+pytest
+numpy
+trimesh
+plotly
+pyyaml
+lark
