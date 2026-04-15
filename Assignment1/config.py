@@ -6,7 +6,7 @@ from copy import deepcopy
 
 @dataclass
 class RobotConfig:
-    urdf_path: str
+    urdf_path: str #unified robot description format
     link_names: List[str]
     joint_names: List[str]
     init_qpos: np.ndarray
@@ -26,7 +26,7 @@ GALBOT_CONFIG = RobotConfig(
         "left_arm_link7",
         "left_arm_end_effector_mount_link",
         "left_gripper_base_link",
-        "left_gripper_tcp_link",
+        "left_gripper_tcp_link",# tcp: tool center point
     ],
     joint_names=[
         "left_arm_joint",
