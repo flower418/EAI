@@ -297,8 +297,9 @@ def uniform_random_quat() -> np.ndarray:
     np.ndarray
         The random quaternion with shape (4,)
     """
-    raise NotImplementedError("Implement this function")
-
+    x = np.random.randn(4)
+    x = x / np.linalg.norm(x)
+    return x
 
 def rpy_to_mat(rpy: np.ndarray) -> np.ndarray:
     """
