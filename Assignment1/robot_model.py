@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 
 from urdf_types import Link, Joint, FixedJoint, RevoluteJoint
 from config import RobotConfig
-from rotation import rpy_to_mat
+from rotation import rpy_to_mat, axis_angle_to_mat
 from utils import str_to_np
 from vis import Vis
 
@@ -69,7 +69,31 @@ class RobotModel:
             0  1
         where R is rotation matrix and t is translation vector
         """
-        raise NotImplementedError("Implement this function")
+        L = len(self.links) # 总的 link 数
+        revolute_joint_idx = 0 # 记录第几个 revolute joint,方便获取 theta
+
+        poses = np.tile(np.eye(4), (L, 1, 1)) # 将 I_{4*4} 重复 L 次
+
+        for (i, joint) in enumerate(self.joints):
+            parent_link_pose = poses[i] # 对于第 i 个 joint,第 i 个 link 视为 parent link
+
+            T = np.eye(4)
+            if isinstance(joint, RevoluteJoint):
+                theta = qpos[revolute_joint_idx]
+                revolute_joint_idx += 1 # 索引下一个 revolute joint
+
+                R_theta = axis_angle_to_mat(theta * joint.axis)
+                rot = joint.rot
+                R_final = rot @ R_theta # 先做局部 theta 的旋转，然后再做 joint 固定的旋转
+                T[:3, :3] = R_final
+            else:
+                T[:3, :3] = joint.rot
+            T[:3, 3] = joint.trans # 更新 translation
+
+            # 然后根据第 i 个 link 的 pose 和当前 joint 的变换更新下一个 link 的 pose
+            poses[i + 1] = parent_link_pose @ T
+        
+        return poses
 
     def load_urdf(self, robot_cfg: RobotConfig):
         """
@@ -153,7 +177,7 @@ if __name__ == "__main__":
     cfg = get_robot_config("galbot")
     robot_model = RobotModel(cfg)
 
-    gt = np.load(os.path.join("data", "fk.npz"))
+    gt = np.load(os.path.join("data", "fk.npz")) # ground truth
     idx = 0
     q = gt["q"][idx]
     gt_poses = gt["poses"][idx]
