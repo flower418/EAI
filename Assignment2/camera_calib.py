@@ -212,7 +212,7 @@ def main():
     parser = argparse.ArgumentParser(description="Trajectory Evaluation - Physics")
     parser.add_argument("--robot", type=str, default="galbot")
     parser.add_argument("--ctrl_dt", type=float, default=0.1)
-    parser.add_argument("--headless", type=int, default=0) # change this to 0 if you want to enable the mujoco viewer
+    parser.add_argument("--headless", type=int, default=1) # change this to 0 if you want to enable the mujoco viewer
     parser.add_argument("--wait_steps", type=int, default=20)
     parser.add_argument("--num", type=int, default=100) # 进行 calibrate 的帧数，能提供这个数量的方程
     args = parser.parse_args()
@@ -251,11 +251,11 @@ def main():
 
     for _ in range(args.num): # 用 100 个数据进行 calibrate
         while True:
-            random_translation = init_translation + np.random.uniform(-0.05, 0.05, 3) # 随机扰动 5cm
+            random_translation = init_translation + np.random.uniform(-0.012, 0.012, 3) # translation 的扰动要小一点，防止看不到棋盘
 
             axis = np.random.randn(3) # 生成一个随机的转轴
             axis /= np.linalg.norm(axis) # 归一化
-            angle = np.random.uniform(-0.3, 0.3) # 生成一个随机的小角度
+            angle = np.random.uniform(-3, 3) # 生成一个随机的角度，角度要大一点才能采到有效的数据
             delta_R, _ = cv2.Rodrigues(angle*axis) # 返回值有 2 个，第一个为随机生成的旋转矩阵
             
             random_rotation = init_rotation @ delta_R # 随机转动 20 度左右
@@ -297,7 +297,7 @@ def main():
 
     est_result = np.eye(4)
     est_result[:3, :3] = R
-    est_result[:3, 3] = t
+    est_result[:3, 3] = t.reshape(3) # 必需 reshape 成 (3,) 才能赋值
     # You can get the rgb image with obs = env.get_obs(), rgb = obs.rgb
     # Intrinsics can be accessed with env.robot_cfg.camera_cfg.intrinsics
 
