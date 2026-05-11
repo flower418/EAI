@@ -8,7 +8,7 @@ from transforms3d.axangles import axangle2mat, mat2axangle
 # You are also free to add additional imports
 # If you want to use packages that are not installed by default, please add an ```Install.md``` to show how to install them
 from src.type import Grasp
-from src.constants import CALIB_GRID_SCALE, CALIB_CHESSBOARD_SIZE
+from src.constants import CALIB_GRID_SCALE, CALIB_CHESSBOARD_SIZE # chessboard 的大小
 from src.sim.grasp_env import Obs, GraspEnvConfig, GraspEnv, get_grasps
 from src.utils import to_pose
 from src.vis import Vis
@@ -212,9 +212,9 @@ def main():
     parser = argparse.ArgumentParser(description="Trajectory Evaluation - Physics")
     parser.add_argument("--robot", type=str, default="galbot")
     parser.add_argument("--ctrl_dt", type=float, default=0.1)
-    parser.add_argument("--headless", type=int, default=1) # change this to 0 if you want to enable the mujoco viewer
+    parser.add_argument("--headless", type=int, default=0) # change this to 0 if you want to enable the mujoco viewer
     parser.add_argument("--wait_steps", type=int, default=20)
-    parser.add_argument("--num", type=int, default=1)
+    parser.add_argument("--num", type=int, default=100) # 进行 calibrate 的帧数，能提供这个数量的方程
     args = parser.parse_args()
 
     # We put the chessboard at the place where the object we want to grasp is located
@@ -231,7 +231,7 @@ def main():
     env.launch()
     env.reset()
 
-    # TODO: Complete this function to get est_result, the 4x4 matrix of the camera pose in the gripper (eef, end-effector) frame
+    # Complete this function to get est_result, the 4x4 matrix of the camera pose in the gripper (eef, end-effector) frame
     # since we use functions from opencv here, we use the opencv convention
     # in opencv convention, the camera pose's rotation matrix's columns represent right, down, and forward on the image respectively
 
@@ -240,12 +240,68 @@ def main():
     # If it is not reachable, the actual eef pose might be different from the input pose and you need to skip this sample
     # env.robot_cfg.joint_init_qpos is the initial joint position, where the chessboard can be seen clearly
     # If you want to get the eef pose of it, you can call env.robot_model.fk_eef(env.robot_cfg.joint_init_qpos)
+    R_gripper = []
+    t_gripper = []
+    R_chessboard = []
+    t_chessboard = []
 
+    K = env.robot_cfg.camera_cfg.intrinsics # 内参
+
+    init_translation, init_rotation = env.robot_model.fk_eef(env.robot_cfg.joint_init_qpos) # qpose 是一个 tuple，(3,)+(3*3)
+
+    for _ in range(args.num): # 用 100 个数据进行 calibrate
+        while True:
+            random_translation = init_translation + np.random.uniform(-0.05, 0.05, 3) # 随机扰动 5cm
+
+            axis = np.random.randn(3) # 生成一个随机的转轴
+            axis /= np.linalg.norm(axis) # 归一化
+            angle = np.random.uniform(-0.3, 0.3) # 生成一个随机的小角度
+            delta_R, _ = cv2.Rodrigues(angle*axis) # 返回值有 2 个，第一个为随机生成的旋转矩阵
+            
+            random_rotation = init_rotation @ delta_R # 随机转动 20 度左右
+
+            random_pose = np.eye(4) # 生成最终的 4*4 的传入 set_eef_pose 的变换矩阵
+            random_pose[:3, :3] = random_rotation
+            random_pose[:3, 3] = random_translation
+
+            succ1 = env.set_eef_pose(random_pose) # 位置是否合法
+
+            if succ1:
+                # 在更新完位置且合法以后获取 camera 拍到的 chessboard 图片
+                rgb = env.get_obs().rgb
+
+                succ2, camera_corners = find_chessboard_corners(rgb, CALIB_CHESSBOARD_SIZE) # 是否能看见 chessboard，以及生成在 camera 中的 corner
+                
+                if succ2: # 重复生成直到某个 valid pose
+                    break
+            
+        qpos = env.sim.robot_qpos # 获取此时每个 joint 的 qpos
+        gripper_translation, gripper_rotation = env.robot_model.fk_eef(qpos)
+
+        local_corners = get_corners_in_chessboard_frame(CALIB_CHESSBOARD_SIZE, CALIB_GRID_SCALE) # 生成在 chessboard 自身中的位置，用于 PnP
+
+        succ, rotation_vec, translation_vec = solve_pnp_checkboard(local_corners, camera_corners, K)
+
+        if succ:
+            rotation_matrix, _ = cv2.Rodrigues(rotation_vec)
+
+            # 只有成功后才能记录相应的 pose，否则维度会不匹配
+            R_gripper.append(gripper_rotation) # 将合法的 rotation, translation 加进去
+            t_gripper.append(gripper_translation.reshape((3, 1))) # 需要 reshape 成 3*1 保证维度正确
+
+            R_chessboard.append(rotation_matrix)
+            t_chessboard.append(translation_vec)
+
+    # 最后生成 calibrate 后的变换 matrix
+    R, t = calibrate_hand_eye(R_gripper, t_gripper, R_chessboard, t_chessboard)
+
+    est_result = np.eye(4)
+    est_result[:3, :3] = R
+    est_result[:3, 3] = t
     # You can get the rgb image with obs = env.get_obs(), rgb = obs.rgb
     # Intrinsics can be accessed with env.robot_cfg.camera_cfg.intrinsics
 
     env.close()
-    est_result = None
 
     # Get the ground truth camera pose
     gt_cam = to_pose(*env.robot_model.fk_camera(env.robot_cfg.joint_init_qpos))
