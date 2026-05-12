@@ -15,7 +15,19 @@ class EstPoseNet(nn.Module):
         """
         super().__init__()
         self.config = config
-        raise NotImplementedError("You need to implement some modules here")
+
+        self.fc1 = nn.Linear(3, 64)
+        self.bn1 = nn.BatchNorm1d(64) # 加一个 batchnorm 层，方便训练能够顺利进行。这个参数表示需要 norm 的特征数
+        self.fc2 = nn.Linear(64, 128)
+        self.bn2 = nn.BatchNorm1d(128)
+        self.fc3 = nn.Linear(128, 1024)
+        self.bn3 = nn.BatchNorm1d(1024)
+        self.fc4 = nn.Linear(1024, 512)
+        self.bn4 = nn.BatchNorm1d(512)
+        self.fc5 = nn.Linear(512, 256)
+        self.bn5 = nn.BatchNorm1d(256)
+        # 最后一层不需要 batchnorm，另外，由于 relu 和 pooling 没有参数，不需要写进 init，在 forward 直接调用即可
+        self.fc6 = nn.Linear(256, 9) # 最终是 9 维的，3 维 translation 加上 6 维 rotation
 
     def forward(
         self, pc: torch.Tensor, trans: torch.Tensor, rot: torch.Tensor, **kwargs
@@ -26,11 +38,11 @@ class EstPoseNet(nn.Module):
         Parameters
         ----------
         pc : torch.Tensor
-            Point cloud in camera frame, shape \(B, N, 3\)
+            Point cloud in camera frame, shape (B, N, 3)
         trans : torch.Tensor
-            Ground truth translation vector in camera frame, shape \(B, 3\)
+            Ground truth translation vector in camera frame, shape (B, 3)
         rot : torch.Tensor
-            Ground truth rotation matrix in camera frame, shape \(B, 3, 3\)
+            Ground truth rotation matrix in camera frame, shape (B, 3, 3)
 
         Returns
         -------
@@ -39,12 +51,35 @@ class EstPoseNet(nn.Module):
         Dict[str, float]
             A dictionary containing additional metrics you want to log
         """
-        raise NotImplementedError("You need to implement the forward function")
-        loss = ...
+        # 整体架构，先 fc，再 bn，最后 relu
+        # 注意 batchnorm 的维度在第 2 个，所以需要把 2，3 维进行 transpose，再转回去
+        x = torch.relu(self.bn1(self.fc1(pc).transpose(1, 2)).transpose(1, 2))
+        x = torch.relu(self.bn2(self.fc2(x).transpose(1, 2)).transpose(1, 2))
+        x = torch.relu(self.bn3(self.fc3(x).transpose(1, 2)).transpose(1, 2)) # B*N*1024
+
+        # 然后 max pooling
+        x, _ = torch.max(x, dim=1) # max 会返回最大值和索引，我们只要最大值，此时 x: (B, 1024)
+
+        x = torch.relu(self.bn4(self.fc4(x).transpose(1, 2)).transpose(1, 2))
+        x = torch.relu(self.bn5(self.fc5(x).transpose(1, 2)).transpose(1, 2)) # (B, 256)
+        scores = self.fc6(x) # (B, 9): 3-translation, 6-rotation
+
+        trans_vec = scores[:, :3]
+        rot_mat = scores[:, 3:]
+
+        # 处理 gt_rot，把它变成 6 维
+        gt_rot = rot[:, :2].flatten()
+
+        trans_loss = torch.sqrt(torch.sum((trans_vec - trans) ** 2))
+        rot_loss = torch.sqrt(torch.sum(rot_mat - gt_rot) ** 2)
+        loss = trans_loss + rot_loss
+
         metric = dict(
             loss=loss,
-            # additional metrics you want to log
+            trans_rot=trans_loss,
+            rot_loss=rot_loss
         )
+
         return loss, metric
 
     def est(self, pc: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -54,17 +89,41 @@ class EstPoseNet(nn.Module):
         Parameters
         ----------
         pc : torch.Tensor
-            Point cloud in camera frame, shape \(B, N, 3\)
+            Point cloud in camera frame, shape (B, N, 3)
 
         Returns
         -------
         trans: torch.Tensor
-            Estimated translation vector in camera frame, shape \(B, 3\)
+            Estimated translation vector in camera frame, shape (B, 3)
         rot: torch.Tensor
-            Estimated rotation matrix in camera frame, shape \(B, 3, 3\)
+            Estimated rotation matrix in camera frame, shape (B, 3, 3)
 
         Note
         ----
         The rotation matrix should satisfy the requirement of orthogonality and determinant 1.
         """
-        raise NotImplementedError("You need to implement the est function")
+        x = torch.relu(self.bn1(self.fc1(pc).transpose(1, 2)).transpose(1, 2))
+        x = torch.relu(self.bn2(self.fc2(x).transpose(1, 2)).transpose(1, 2))
+        x = torch.relu(self.bn3(self.fc3(x).transpose(1, 2)).transpose(1, 2)) # B*N*1024
+
+        # 然后 max pooling
+        x, _ = torch.max(x, dim=1) # max 会返回最大值和索引，我们只要最大值，此时 x: (B, 1024)
+
+        x = torch.relu(self.bn4(self.fc4(x).transpose(1, 2)).transpose(1, 2))
+        x = torch.relu(self.bn5(self.fc5(x).transpose(1, 2)).transpose(1, 2)) # (B, 256)
+        pred_vec = self.fc6(x) # (B, 9): 3-translation, 6-rotation
+
+        trans_vec = pred_vec[:, :3]
+        rot_vec = pred_vec[:, 3:]
+
+        rot_mat = torch.eye(3)
+        col1 = rot_vec[:3]
+        col2 = rot_vec[3:]
+        b1 = torch.norm(col1)
+        b2 = torch.norm(col2 - torch.sum(b1 * col2) * b1)
+        b3 = torch.cross(b1, b2) # 叉乘
+        rot_mat[:, 0] = b1
+        rot_mat[:, 1] = b2
+        rot_mat[:, 2] = b3
+
+        return trans_vec, rot_vec
