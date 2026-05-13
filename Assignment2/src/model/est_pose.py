@@ -124,8 +124,8 @@ class EstPoseNet(nn.Module):
         col1 = rot_vec[:, :, 0] # (B, 3)
         col2 = rot_vec[:, :, 1] # (B, 3)
         b1 = col1 / torch.norm(col1, dim=1, keepdim=True) # torch.norm 返回 (B, 1)，然后用 col1 除以 norm 就得到 b1: (B, 3)
-        temp_b2 = col2 - torch.sum(b1 * col2) * b1
-        b2 = temp_b2 / torch.norm(b2, dim=1, keepdim=True) # (B, 3)
+        temp_b2 = col2 - torch.sum(b1 * col2, dim=1, keepdim=True) * b1 # 不能把 batch 相关的也 sum 进去，要确保 dim 的正确
+        b2 = temp_b2 / torch.norm(temp_b2, dim=1, keepdim=True) # (B, 3)
         b3 = torch.cross(b1, b2, dim=1) # 按第二个向量维度做叉乘
 
         rot_mat = torch.stack([b1, b2, b3], dim=2) # 由于需要在第三个维度使用索引表示第 1,2,3 列，所以 stack 的 dim=2
