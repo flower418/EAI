@@ -29,7 +29,24 @@ def main():
     parser.add_argument("--headless", type=int, default=0)
     parser.add_argument("--wait_steps", type=int, default=15)
     parser.add_argument("--try_plan_num", type=int, default=3)
-    parser.add_argument("--vis", type=int, default=1)
+    parser.add_argument(
+        "--vis",
+        type=int,
+        default=0,
+        help="Whether to open the Plotly point-cloud/mesh debug view in browser.",
+    )
+    parser.add_argument(
+        "--max_samples",
+        type=int,
+        default=None,
+        help="Maximum number of dataset samples to evaluate. Useful for visual debugging.",
+    )
+    parser.add_argument(
+        "--pause",
+        type=int,
+        default=0,
+        help="Whether to pause before closing each MuJoCo viewer window.",
+    )
     args = parser.parse_args()
 
     # load config & dataset
@@ -51,7 +68,10 @@ def main():
     model = model.eval().to(args.device)
 
     result = []
-    for dic in tqdm(dataloader):
+    for sample_idx, dic in enumerate(tqdm(dataloader)):
+        if args.max_samples is not None and sample_idx >= args.max_samples:
+            break
+
         dic = {k: v[0].numpy() for k, v in dic.items()}
         robot_frame_pc = (
             np.einsum("ab,nb->na", dic["camera_pose"][:3, :3], dic["pc"])
@@ -89,6 +109,7 @@ def main():
         env.launch()
         env.reset()
         grasps = get_grasps(args.obj)
+        plan = None
         for obj_frame_grasp in grasps:
             robot_frame_grasp = transform_grasp_pose(
                 obj_frame_grasp,
@@ -115,7 +136,15 @@ def main():
             f"Current success rate: {sum(result)}/{len(result)} = {sum(result) / len(result)}"
         )
 
+        if args.pause and not args.headless:
+            input("Press Enter to close this MuJoCo viewer and continue...")
+
         env.close()
+
+    if len(result) > 0:
+        print(f"Final success rate: {sum(result)}/{len(result)} = {sum(result) / len(result)}")
+    else:
+        print("No samples evaluated.")
 
 
 if __name__ == "__main__":
