@@ -60,23 +60,24 @@ class EstPoseNet(nn.Module):
         # 然后 max pooling
         x, _ = torch.max(x, dim=1) # max 会返回最大值和索引，我们只要最大值，此时 x: (B, 1024)
 
-        x = torch.relu(self.bn4(self.fc4(x).transpose(1, 2)).transpose(1, 2))
-        x = torch.relu(self.bn5(self.fc5(x).transpose(1, 2)).transpose(1, 2)) # (B, 256)
+        x = torch.relu(self.bn4(self.fc4(x))) # 由于变回了 2 维，不需要 transpose，直接就可以 batchnorm
+        x = torch.relu(self.bn5(self.fc5(x))) # (B, 256)
         scores = self.fc6(x) # (B, 9): 3-translation, 6-rotation
 
         trans_vec = scores[:, :3]
-        rot_mat = scores[:, 3:]
+        rot_vec = scores[:, 3:]
 
         # 处理 gt_rot，把它变成 6 维
-        gt_rot = rot[:, :2].flatten()
+        # 注意这里 gt_rot 是 3 个维度的，所以应该重新处理
+        gt_rot = rot[:, :, :2].reshape(rot.shape[0], -1) # (B, 6)
 
         trans_loss = torch.sqrt(torch.sum((trans_vec - trans) ** 2))
-        rot_loss = torch.sqrt(torch.sum(rot_mat - gt_rot) ** 2)
+        rot_loss = torch.sqrt(torch.sum((rot_vec - gt_rot) ** 2))
         loss = trans_loss + rot_loss
 
         metric = dict(
             loss=loss,
-            trans_rot=trans_loss,
+            trans_loss=trans_loss,
             rot_loss=rot_loss
         )
 
@@ -109,16 +110,19 @@ class EstPoseNet(nn.Module):
         # 然后 max pooling
         x, _ = torch.max(x, dim=1) # max 会返回最大值和索引，我们只要最大值，此时 x: (B, 1024)
 
-        x = torch.relu(self.bn4(self.fc4(x).transpose(1, 2)).transpose(1, 2))
-        x = torch.relu(self.bn5(self.fc5(x).transpose(1, 2)).transpose(1, 2)) # (B, 256)
+        x = torch.relu(self.bn4(self.fc4(x)))
+        x = torch.relu(self.bn5(self.fc5(x))) # (B, 256)
         pred_vec = self.fc6(x) # (B, 9): 3-translation, 6-rotation
 
+        # 注意维度
         trans_vec = pred_vec[:, :3]
-        rot_vec = pred_vec[:, 3:]
+        rot_vec = pred_vec[:, 3:] # (B, 6)
 
-        rot_mat = torch.eye(3)
-        col1 = rot_vec[:3]
-        col2 = rot_vec[3:]
+        # 将 rot_vec 拆成 3 个维度
+        rot_vec = rot_vec.reshape(-1, 3, 2) # (B, 3, 2)
+
+        col1 = rot_vec[:, :, 0]
+        col2 = rot_vec[:, :, 1]
         b1 = torch.norm(col1)
         b2 = torch.norm(col2 - torch.sum(b1 * col2) * b1)
         b3 = torch.cross(b1, b2) # 叉乘
