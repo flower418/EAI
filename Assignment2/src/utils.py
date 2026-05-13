@@ -81,7 +81,25 @@ def transform_grasp_pose(
     Grasp
         The transformed grasp in the robot frame.
     """
-    raise NotImplementedError
+    T_robot_camera = np.eye(4)
+    T_robot_camera[:3, :3] = cam_rot
+    T_robot_camera[:3, 3] = cam_trans
+
+    # 注意这里估计的是 object 而不是 grasp，所以是 T_camera_object
+    T_camera_object = np.eye(4)
+    T_camera_object[:3, :3] = est_rot
+    T_camera_object[:3, 3] = est_trans
+
+    # 然后从参数中的 grasp 得到 grasp 相对 object 的pose，这才串起来从 robot 到 grasp 的全线路
+    T_object_grasp = np.eye(4)
+    T_object_grasp[:3, :3] = grasp.rot
+    T_object_grasp[:3, 3] = grasp.trans
+
+    T_robot_grasp = T_robot_camera @ T_camera_object @ T_object_grasp
+    grasp_rot = T_robot_grasp[:3, :3]
+    grasp_trans = T_robot_grasp[:3, 3]
+
+    return Grasp(grasp_trans, grasp_rot, grasp.width)
 
 def get_pc(depth: np.ndarray, intrinsics: np.ndarray) -> np.ndarray:
     """
